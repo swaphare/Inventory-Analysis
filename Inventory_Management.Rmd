@@ -1,0 +1,181 @@
+---
+title: "Inventory Management"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-02-02"
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(lubridate)
+library(ggplot2)
+library(zoo)
+library("fUnitRoots")
+library(lmtest)
+library("forecast")
+
+
+
+# tsibble: tidy temporal data frames and tools
+library(tsibble)
+
+# fable (forecast table)
+library(fable)
+
+# fabletools - provides tools for building modelling packages, with a focus on time series forecasting
+library(fabletools)
+
+# Feature Extraction and Statistics for Time Series in tsibble format
+library(feasts)
+
+# tsibbledata: used datasets for example global_economy
+library(tsibbledata)
+
+library(ggfortify)
+library(tidyverse)
+library(fpp2)
+library(rio)
+library(gridExtra)
+library(seasonal)
+library(smooth)
+```
+
+## Import Data
+
+```{r}
+df<-read.csv("/Users/shraddhawaphare/Desktop/Aniket/Project_Inventory_Mangement/Iowa_Liquor_Sales.csv")
+head(df)
+```
+
+## EDA
+
+```{r EDA}
+df <- df[,-1] # Remove invoice number
+df <-df[,-c(2:9)]#Remove Zip Code
+df$Sale..Dollars. = gsub("\\$", "", df$Sale..Dollars.) #Removing $sign from the sales
+df$Sale..Dollars.<-as.numeric(df$Sale..Dollars.)
+df$Date <- as.Date(df$Date, "%m/%d/%Y") # Making date format R friendly
+df$dayofweek <- wday(df$Date,label = TRUE) # Creating column that highlights what day of week
+
+df$month <- month(df$Date,label=TRUE) # Creating column showing month
+
+df$year <- year(df$Date) # creating column showing year
+head(df)
+df1<-df[c(1,13)]
+df2<- df1%>% group_by(Date)  %>%
+       summarise(total_sales = sum(Bottles.Sold))
+head(df2)
+```
+
+
+
+```{r}
+
+df %>%
+  group_by(dayofweek) %>%
+  summarise(sales = sum(Bottles.Sold)) %>%
+  ggplot(aes(dayofweek,sales, group = 1)) + 
+  geom_area(aes(alpha = .5, fill = 1)) +
+  geom_line(stat = 'identity', aes(color = 1)) +
+  theme_minimal() +
+  labs(x = "", y = "Sales", title = "Sales by day of week")  +
+  scale_y_continuous(labels = scales::comma) + 
+  guides(color = FALSE, fill = FALSE, alpha = FALSE)
+```
+```{r}
+
+df %>%
+  group_by(month) %>%
+  summarise(sales = sum(Bottles.Sold)) %>%
+  ggplot(aes(month,sales, group = 1)) + 
+  geom_area(aes(alpha = .5, fill = 1)) +
+  geom_line(stat = 'identity', aes(color = 1)) +
+  theme_minimal() +
+  labs(x = "", y = "Sales", title = "Sales by month")  +
+  scale_y_continuous(labels = scales::comma)
+```
+```{r}
+
+```
+```{r}
+ts_train1 <- ts(df2$total_sales , start = c(2012,1) , frequency = 365)
+print(ts_train1)
+plot(ts_train1)
+timeseriescomponents1 <- decompose(ts_train1)
+plot(timeseriescomponents1)
+urkpssTest(ts_train1, type = c("tau"), lags = c("short"),use.lag = NULL, doplot = TRUE)
+tsstationary = diff(ts_train1, differences=1)
+plot(tsstationary)
+fitARIMA1<-arima(ts_train1, order=c(1,1,1),seasonal = list(order = c(1,0,0), period = 12),method="ML")
+fitARIMA1
+#significance of coefficients
+coeftest(fitARIMA1)
+par(mfrow=c(1,1))
+acf(fitARIMA1$residuals)
+plot(forecast(fitARIMA1, h=40))
+D<-forecast(fitARIMA1,h=40)
+D
+
+```
+```{r}
+#Safety Stock
+Lead_time<-7    #1 week lead time
+demand={}
+for(i in 1:length(D)) {        # Loop from 1 to length of list
+  demand[i]<-(D[[4]][i])             # Printing some output
+}
+demand
+for(i in 1:length(demand)) {
+sd_per_day <- sd(demand, na.rm = TRUE)
+}
+sd_per_day
+service_level <- 0.95
+Z_a <-  qnorm(service_level)
+Z_a
+safety_stock <- round(Z_a*sd_per_day*sqrt(Lead_time))
+safety_stock
+```
+```{r}
+#Reorder Point
+daily_avg <-mean(demand)
+daily_avg
+reorder_point <-round((Lead_time* daily_avg) + safety_stock)
+reorder_point
+```
+```{r}
+#EOQ
+holding_Cost <-mean(df$Holding.Cost)
+holding_Cost
+ordering_cost <-mean(df$Ordering.cost)
+ordering_cost
+eoq<-sqrt(2*ordering_cost*daily_avg/holding_Cost)
+eoq
+
+```
+
+```{r}
+df3<-append(df2$total_sales,demand)
+std_deviation <- sd(df3, na.rm = TRUE)
+std_deviation
+safety_stock_hist <- round(Z_a*std_deviation*sqrt(Lead_time))
+safety_stock_hist
+
+```
+
+```{r}
+#Reorder Point
+df3_mean<-mean(df3)
+reorder_point_hist <-round((Lead_time* df3_mean) + safety_stock_hist)
+reorder_point_hist
+```
+
+```{r}
+#EOQ
+eoq_hist<-round(sqrt(2*ordering_cost*df3_mean/holding_Cost))
+eoq_hist
+```
